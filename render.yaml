@@ -8,7 +8,16 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: MONGODB_URI
+        fromDatabase:
+          name: bingo-mongodb
+          property: connectionString
       - key: CLIENT_URL
         value: https://your-bingo-frontend.onrender.com
       - key: SECRET_KEY
         generateValue: true
+
+databases:
+  - name: bingo-mongodb
+    plan: free
+    ipAllowList: []
