@@ -1,44 +1,43 @@
-require('dotenv').config();
 const app = require('./app');
-const connectDatabase = require('./config/database');
-const { setupSocketServer } = require('./config/socket');
-const { setupJobs } = require('./jobs/gameScheduler');
+const { connectDB } = require('./database/connection');
 const logger = require('./utils/logger');
 
 const PORT = process.env.PORT || 3000;
 
-async function startServer() {
-  try {
-    // Connect to database first
-    await connectDatabase();
-    logger.info('📦 Database connected successfully');
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  logger.error('UNCAUGHT EXCEPTION! 💥 Shutting down...');
+  logger.error(error.name, error.message);
+  process.exit(1);
+});
 
-    // Setup socket server
-    const server = setupSocketServer(app);
-    
-    // Start server
-    server.listen(PORT, () => {
-      logger.info(`🎯 Bingo Server running on port ${PORT}`);
-      logger.info(`🚀 Environment: ${process.env.NODE_ENV}`);
-      logger.info(`🗄️ Database: ${process.env.DB_NAME || 'bingo-game'}`);
-      
-      // Setup scheduled jobs
-      setupJobs();
-      logger.info('⏰ Game scheduler started');
-    });
+// Connect to database
+connectDB();
 
-    // Graceful shutdown
-    process.on('SIGTERM', async () => {
-      logger.info('SIGTERM received, shutting down gracefully');
-      server.close(() => {
-        logger.info('Process terminated');
-      });
-    });
+const server = app.listen(PORT, () => {
+  logger.info(`🚀 Bingo Server running on port ${PORT}`);
+  logger.info(`📱 Environment: ${process.env.NODE_ENV || 'development'}`);
+});
 
-  } catch (error) {
-    logger.error('Failed to start server:', error);
+// Socket.io setup
+const { initSocket } = require('./config/socket');
+initSocket(server);
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (error) => {
+  logger.error('UNHANDLED REJECTION! 💥 Shutting down...');
+  logger.error(error.name, error.message);
+  server.close(() => {
     process.exit(1);
-  }
-}
+  });
+});
 
-startServer();
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  logger.info('SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    logger.info('Process terminated');
+  });
+});
+
+module.exports = server;
