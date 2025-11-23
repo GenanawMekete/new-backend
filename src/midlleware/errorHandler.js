@@ -1,14 +1,13 @@
-services:
-  - type: web
-    name: bingo-backend
-    env: node
-    plan: free
-    buildCommand: npm install
-    startCommand: npm start
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: CLIENT_URL
-        value: https://frontend.onrender.com
-      - key: SECRET_KEY
-        generateValue: true
+function errorHandler(err, req, res, next) {
+  console.error('Error:', err);
+
+  let error = { ...err };
+  error.message = err.message;
+
+  res.status(error.statusCode || 500).json({
+    success: false,
+    error: error.message || 'Server Error'
+  });
+}
+
+module.exports = errorHandler;
