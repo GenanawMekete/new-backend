@@ -1,71 +1,83 @@
 const mongoose = require('mongoose');
+const { GAME_CONSTANTS } = require('../config/constants');
 
 const gameSchema = new mongoose.Schema({
+  // Game Identification
   gameId: {
     type: String,
     required: true,
-    unique: true,
-    index: true
+    unique: true
   },
-  type: {
-    type: String,
-    enum: ['quick', 'private', 'tournament'],
-    default: 'quick'
+  room: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Room',
+    required: true
   },
+
+  // Game State
   status: {
     type: String,
-    enum: ['waiting', 'starting', 'playing', 'ended', 'cancelled'],
-    default: 'waiting'
+    enum: Object.values(GAME_CONSTANTS.STATUS),
+    default: GAME_CONSTANTS.STATUS.WAITING
   },
-  betAmount: {
-    type: Number,
-    required: true,
-    min: 1
+  phase: {
+    type: String,
+    enum: ['lobby', 'playing', 'results'],
+    default: 'lobby'
   },
-  maxPlayers: {
-    type: Number,
-    default: 1000
-  },
-  minPlayers: {
-    type: Number,
-    default: 2
-  },
+
+  // Players
   players: [{
-    user: {
+    player: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+      ref: 'Player',
+      required: true
+    },
+    bingoCard: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'BingoCard',
       required: true
     },
     joinedAt: {
       type: Date,
       default: Date.now
     },
-    selectedCards: [{
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'BingoCard'
-    }],
-    totalBet: {
-      type: Number,
-      required: true
+    isReady: {
+      type: Boolean,
+      default: false
     },
     hasClaimedBingo: {
       type: Boolean,
       default: false
     },
-    winningPattern: {
-      type: String,
-      enum: ['single_line', 'double_line', 'triple_line', 'full_house', 'four_corners', 'diagonal', 'x_pattern', 'cross_pattern']
+    claimTime: Date
+  }],
+
+  // Game Configuration
+  config: {
+    duration: {
+      type: Number,
+      default: GAME_CONSTANTS.TIMERS.GAME
     },
-    winningCard: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'BingoCard'
+    maxPlayers: {
+      type: Number,
+      default: GAME_CONSTANTS.game.maxPlayers
     },
-    winnings: {
+    minPlayers: {
+      type: Number,
+      default: GAME_CONSTANTS.game.minPlayers
+    },
+    entryFee: {
       type: Number,
       default: 0
     },
-    wonAt: Date
-  }],
+    prizePool: {
+      type: Number,
+      default: 0
+    }
+  },
+
+  // Game Progress
   calledNumbers: [{
     number: {
       type: Number,
@@ -75,233 +87,304 @@ const gameSchema = new mongoose.Schema({
     },
     letter: {
       type: String,
-      enum: ['B', 'I', 'N', 'G', 'O']
+      enum: ['B', 'I', 'N', 'G', 'O'],
+      required: true
     },
     calledAt: {
       type: Date,
       default: Date.now
+    },
+    callOrder: {
+      type: Number,
+      required: true
     }
   }],
+
   currentNumber: {
     number: Number,
     letter: String,
     calledAt: Date
   },
-  winner: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  },
-  winningPattern: String,
-  potSize: {
-    type: Number,
-    default: 0
-  },
-  gameSettings: {
-    interval: {
-      type: Number,
-      default: 30000 // 30 seconds
+
+  // Timers
+  startTime: Date,
+  endTime: Date,
+  actualStartTime: Date,
+  actualEndTime: Date,
+
+  // Results
+  winners: [{
+    player: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Player'
     },
-    numberCallInterval: {
-      type: Number,
-      default: 2000 // 2 seconds
+    bingoCard: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'BingoCard'
     },
-    maxCardsPerPlayer: {
-      type: Number,
-      default: 6
+    pattern: {
+      type: String,
+      enum: Object.values(GAME_CONSTANTS.WINNING_PATTERNS)
     },
-    autoStart: {
-      type: Boolean,
-      default: true
-    }
-  },
-  scheduledStart: {
-    type: Date,
-    default: Date.now
-  },
-  startedAt: Date,
-  endedAt: Date,
-  endReason: String,
-  duration: Number, // in seconds
-  isPublic: {
-    type: Boolean,
-    default: true
-  },
-  roomCode: {
-    type: String,
-    sparse: true
+    prize: Number,
+    claimTime: Date,
+    winningNumbers: [Number]
+  }],
+
+  // Statistics
+  stats: {
+    totalCalls: {
+      type: Number,
+      default: 0
+    },
+    averageClaimTime: Number,
+    fastestBingo: Number // in seconds
   }
+
 }, {
-  timestamps: true
+  timestamps: true,
+  toJSON: {
+    transform: function(doc, ret) {
+      ret.id = ret._id;
+      delete ret._id;
+      delete ret.__v;
+      return ret;
+    }
+  }
 });
 
 // Indexes
-gameSchema.index({ status: 1, scheduledStart: 1 });
+gameSchema.index({ gameId: 1 });
+gameSchema.index({ status: 1 });
+gameSchema.index({ room: 1 });
+gameSchema.index({ startTime: 1 });
+gameSchema.index({ 'players.player': 1 });
 gameSchema.index({ createdAt: 1 });
-gameSchema.index({ type: 1, status: 1 });
-gameSchema.index({ roomCode: 1 }, { sparse: true });
 
 // Virtuals
 gameSchema.virtual('playerCount').get(function() {
   return this.players.length;
 });
 
-gameSchema.virtual('calledNumbersCount').get(function() {
-  return this.calledNumbers.length;
-});
-
 gameSchema.virtual('isFull').get(function() {
-  return this.players.length >= this.maxPlayers;
+  return this.players.length >= this.config.maxPlayers;
 });
 
-gameSchema.virtual('timeUntilStart').get(function() {
-  if (this.status !== 'waiting') return 0;
-  return Math.max(0, this.scheduledStart - new Date());
+gameSchema.virtual('canStart').get(function() {
+  return this.players.length >= this.config.minPlayers && this.status === GAME_CONSTANTS.STATUS.WAITING;
 });
 
-// Methods
-gameSchema.methods.addPlayer = function(userId, selectedCards, totalBet) {
-  if (this.status !== 'waiting') {
-    throw new Error('Game has already started');
-  }
-  
+gameSchema.virtual('timeElapsed').get(function() {
+  if (!this.actualStartTime) return 0;
+  const end = this.actualEndTime || new Date();
+  return Math.floor((end - this.actualStartTime) / 1000);
+});
+
+gameSchema.virtual('timeRemaining').get(function() {
+  if (this.status !== GAME_CONSTANTS.STATUS.IN_PROGRESS) return 0;
+  const elapsed = this.timeElapsed;
+  return Math.max(0, this.config.duration - elapsed);
+});
+
+// Instance Methods
+gameSchema.methods.addPlayer = function(playerId, bingoCardId) {
   if (this.isFull) {
     throw new Error('Game is full');
   }
   
-  if (this.players.some(player => player.user.toString() === userId.toString())) {
+  if (this.status !== GAME_CONSTANTS.STATUS.WAITING) {
+    throw new Error('Game has already started');
+  }
+
+  // Check if player already in game
+  const existingPlayer = this.players.find(p => p.player.toString() === playerId.toString());
+  if (existingPlayer) {
     throw new Error('Player already in game');
   }
-  
+
   this.players.push({
-    user: userId,
-    selectedCards,
-    totalBet
+    player: playerId,
+    bingoCard: bingoCardId,
+    joinedAt: new Date()
   });
-  
-  this.potSize += totalBet;
-  
-  return this.players.length;
+
+  return this.save();
 };
 
-gameSchema.methods.removePlayer = function(userId) {
-  const playerIndex = this.players.findIndex(player => 
-    player.user.toString() === userId.toString()
-  );
+gameSchema.methods.removePlayer = function(playerId) {
+  const playerIndex = this.players.findIndex(p => p.player.toString() === playerId.toString());
   
   if (playerIndex === -1) {
     throw new Error('Player not found in game');
   }
-  
-  const player = this.players[playerIndex];
-  this.potSize -= player.totalBet;
+
   this.players.splice(playerIndex, 1);
-  
-  return this.players.length;
+  return this.save();
 };
 
 gameSchema.methods.callNumber = function() {
-  if (this.calledNumbers.length >= 75) {
-    return null;
+  if (this.status !== GAME_CONSTANTS.STATUS.IN_PROGRESS) {
+    throw new Error('Game is not in progress');
   }
-  
-  let newNumber;
-  const calledNumbers = this.calledNumbers.map(cn => cn.number);
+
+  // Generate unique number that hasn't been called
+  const calledNumbers = new Set(this.calledNumbers.map(cn => cn.number));
+  let number, letter;
   
   do {
-    newNumber = Math.floor(Math.random() * 75) + 1;
-  } while (calledNumbers.includes(newNumber));
-  
-  const letters = ['B', 'I', 'N', 'G', 'O'];
-  const letterIndex = Math.floor((newNumber - 1) / 15);
+    number = Math.floor(Math.random() * 75) + 1;
+    
+    // Determine letter based on number range
+    if (number <= 15) letter = 'B';
+    else if (number <= 30) letter = 'I';
+    else if (number <= 45) letter = 'N';
+    else if (number <= 60) letter = 'G';
+    else letter = 'O';
+    
+  } while (calledNumbers.has(number));
+
+  const callOrder = this.calledNumbers.length + 1;
   
   const calledNumber = {
-    number: newNumber,
-    letter: letters[letterIndex],
+    number,
+    letter,
+    callOrder,
     calledAt: new Date()
   };
-  
+
   this.calledNumbers.push(calledNumber);
   this.currentNumber = calledNumber;
-  
-  return calledNumber;
+  this.stats.totalCalls = callOrder;
+
+  return this.save();
 };
 
-gameSchema.methods.markPlayerWin = function(userId, cardId, pattern, winnings) {
-  const player = this.players.find(p => p.user.toString() === userId.toString());
-  if (!player) {
-    throw new Error('Player not found in game');
+gameSchema.methods.claimBingo = function(playerId, pattern, winningNumbers) {
+  if (this.status !== GAME_CONSTANTS.STATUS.IN_PROGRESS) {
+    throw new Error('Game is not in progress');
   }
+
+  const playerEntry = this.players.find(p => p.player.toString() === playerId.toString());
+  if (!playerEntry) {
+    throw new Error('Player not in game');
+  }
+
+  if (playerEntry.hasClaimedBingo) {
+    throw new Error('Player has already claimed bingo');
+  }
+
+  // Check if bingo is already claimed in this game
+  if (this.winners.length > 0) {
+    throw new Error('Bingo already claimed in this game');
+  }
+
+  const claimTime = new Date();
+  const timeToWin = Math.floor((claimTime - this.actualStartTime) / 1000);
+
+  // Calculate prize
+  const basePrize = GAME_CONSTANTS.REWARDS.BASE_PRIZE;
+  const speedBonus = Math.max(0, GAME_CONSTANTS.REWARDS.SPEED_BONUS - Math.floor(timeToWin / 5));
+  const patternBonus = pattern === GAME_CONSTANTS.WINNING_PATTERNS.FULL_HOUSE ? 
+    GAME_CONSTANTS.REWARDS.FULL_HOUSE_BONUS : 0;
   
-  player.hasClaimedBingo = true;
-  player.winningPattern = pattern;
-  player.winningCard = cardId;
-  player.winnings = winnings;
-  player.wonAt = new Date();
-  
-  this.winner = userId;
-  this.winningPattern = pattern;
-  this.status = 'ended';
-  this.endedAt = new Date();
-  this.duration = Math.floor((this.endedAt - this.startedAt) / 1000);
-  this.endReason = `Bingo by player ${userId}`;
-  
-  return player;
+  const totalPrize = basePrize + speedBonus + patternBonus;
+
+  // Add to winners
+  this.winners.push({
+    player: playerId,
+    bingoCard: playerEntry.bingoCard,
+    pattern,
+    prize: totalPrize,
+    claimTime,
+    winningNumbers
+  });
+
+  playerEntry.hasClaimedBingo = true;
+  playerEntry.claimTime = claimTime;
+
+  // Update game stats
+  if (!this.stats.fastestBingo || timeToWin < this.stats.fastestBingo) {
+    this.stats.fastestBingo = timeToWin;
+  }
+
+  this.status = GAME_CONSTANTS.STATUS.FINISHED;
+  this.actualEndTime = claimTime;
+
+  return this.save();
 };
 
-gameSchema.methods.getPlayer = function(userId) {
-  return this.players.find(player => 
-    player.user.toString() === userId.toString()
-  );
+gameSchema.methods.startGame = function() {
+  if (this.status !== GAME_CONSTANTS.STATUS.WAITING) {
+    throw new Error('Game cannot be started');
+  }
+
+  if (!this.canStart) {
+    throw new Error('Not enough players to start game');
+  }
+
+  this.status = GAME_CONSTANTS.STATUS.IN_PROGRESS;
+  this.phase = 'playing';
+  this.actualStartTime = new Date();
+  this.startTime = new Date();
+  this.endTime = new Date(Date.now() + this.config.duration * 1000);
+
+  return this.save();
 };
 
-// Static methods
+gameSchema.methods.endGame = function(reason = 'time_up') {
+  if (this.status === GAME_CONSTANTS.STATUS.FINISHED) {
+    return this;
+  }
+
+  this.status = GAME_CONSTANTS.STATUS.FINISHED;
+  this.phase = 'results';
+  this.actualEndTime = new Date();
+
+  // If no winners and there's a prize pool, distribute among active players
+  if (this.winners.length === 0 && this.config.prizePool > 0) {
+    const consolationPrize = Math.floor(this.config.prizePool / this.players.length);
+    // This would be handled by the game service
+  }
+
+  return this.save();
+};
+
+// Static Methods
 gameSchema.statics.findActiveGames = function() {
   return this.find({
-    status: { $in: ['waiting', 'starting', 'playing'] }
-  }).populate('players.user', 'telegramId firstName username avatar');
+    status: { $in: [GAME_CONSTANTS.STATUS.WAITING, GAME_CONSTANTS.STATUS.IN_PROGRESS] }
+  }).populate('players.player', 'telegramUsername firstName lastName');
 };
 
-gameSchema.statics.findByGameId = function(gameId) {
-  return this.findOne({ gameId })
-    .populate('players.user', 'telegramId firstName username avatar balance')
-    .populate('players.selectedCards')
-    .populate('winner', 'telegramId firstName username');
+gameSchema.statics.findByPlayer = function(playerId) {
+  return this.findOne({
+    'players.player': playerId,
+    status: { $in: [GAME_CONSTANTS.STATUS.WAITING, GAME_CONSTANTS.STATUS.IN_PROGRESS] }
+  });
 };
 
-gameSchema.statics.getGameStats = function() {
+gameSchema.statics.getGameStats = function(days = 7) {
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - days);
+
   return this.aggregate([
+    {
+      $match: {
+        createdAt: { $gte: startDate },
+        status: GAME_CONSTANTS.STATUS.FINISHED
+      }
+    },
     {
       $group: {
         _id: null,
         totalGames: { $sum: 1 },
-        activeGames: {
-          $sum: {
-            $cond: [
-              { $in: ['$status', ['waiting', 'starting', 'playing']] },
-              1,
-              0
-            ]
-          }
-        },
-        totalPot: { $sum: '$potSize' },
-        averagePlayers: { $avg: { $size: '$players' } }
+        totalPlayers: { $sum: { $size: '$players' } },
+        totalWinners: { $sum: { $size: '$winners' } },
+        totalPrize: { $sum: { $sum: '$winners.prize' } },
+        averageGameDuration: { $avg: '$stats.fastestBingo' }
       }
     }
   ]);
 };
-
-// Pre-save middleware
-gameSchema.pre('save', function(next) {
-  if (this.isModified('status') && this.status === 'playing' && !this.startedAt) {
-    this.startedAt = new Date();
-  }
-  
-  if (this.isModified('status') && this.status === 'ended' && !this.endedAt) {
-    this.endedAt = new Date();
-    this.duration = Math.floor((this.endedAt - this.startedAt) / 1000);
-  }
-  
-  next();
-});
 
 module.exports = mongoose.model('Game', gameSchema);
