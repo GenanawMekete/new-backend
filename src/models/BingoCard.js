@@ -1,15 +1,16 @@
 const mongoose = require('mongoose');
+const { GAME_CONSTANTS } = require('../config/constants');
 
 const bingoCardSchema = new mongoose.Schema({
+  // Card Identification
   cardId: {
     type: String,
     required: true,
-    unique: true,
-    index: true
+    unique: true
   },
-  user: {
+  player: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
+    ref: 'Player',
     required: true
   },
   game: {
@@ -17,6 +18,8 @@ const bingoCardSchema = new mongoose.Schema({
     ref: 'Game',
     required: true
   },
+
+  // Card Numbers (5x5 grid)
   numbers: {
     B: [{ type: Number, min: 1, max: 15 }],
     I: [{ type: Number, min: 16, max: 30 }],
@@ -24,230 +27,288 @@ const bingoCardSchema = new mongoose.Schema({
     G: [{ type: Number, min: 46, max: 60 }],
     O: [{ type: Number, min: 61, max: 75 }]
   },
+
+  // Marked numbers tracking
   markedNumbers: [{
-    number: Number,
+    number: {
+      type: Number,
+      required: true
+    },
+    position: {
+      row: { type: Number, min: 0, max: 4 },
+      col: { type: Number, min: 0, max: 4 }
+    },
     markedAt: {
       type: Date,
       default: Date.now
-    },
-    position: {
-      row: Number,
-      col: Number
     }
   }],
-  patterns: {
-    singleLine: {
-      isComplete: { type: Boolean, default: false },
-      completedAt: Date,
-      lines: [Number] // row indices that are complete
-    },
-    doubleLine: {
-      isComplete: { type: Boolean, default: false },
-      completedAt: Date
-    },
-    tripleLine: {
-      isComplete: { type: Boolean, default: false },
-      completedAt: Date
-    },
-    fullHouse: {
-      isComplete: { type: Boolean, default: false },
-      completedAt: Date
-    },
-    fourCorners: {
-      isComplete: { type: Boolean, default: false },
-      completedAt: Date
-    },
-    diagonal: {
-      isComplete: { type: Boolean, default: false },
-      completedAt: Date
-    },
-    xPattern: {
-      isComplete: { type: Boolean, default: false },
-      completedAt: Date
-    },
-    crossPattern: {
-      isComplete: { type: Boolean, default: false },
-      completedAt: Date
-    }
+
+  // Winning state
+  hasBingo: {
+    type: Boolean,
+    default: false
   },
+  winningPattern: {
+    type: String,
+    enum: Object.values(GAME_CONSTANTS.WINNING_PATTERNS)
+  },
+  winningNumbers: [Number],
+  bingoDeclaredAt: Date,
+
+  // Card metadata
   isActive: {
     type: Boolean,
     default: true
   },
   createdAt: {
     type: Date,
-    default: Date.now
+    default: Date.now,
+    expires: 86400 * 7 // Auto-delete after 7 days
   }
+
 }, {
-  timestamps: true
+  timestamps: true,
+  toJSON: {
+    transform: function(doc, ret) {
+      ret.id = ret._id;
+      delete ret._id;
+      delete ret.__v;
+      return ret;
+    }
+  }
 });
 
 // Indexes
-bingoCardSchema.index({ user: 1, game: 1 });
-bingoCardSchema.index({ game: 1, isActive: 1 });
-bingoCardSchema.index({ createdAt: 1 });
+bingoCardSchema.index({ cardId: 1 });
+bingoCardSchema.index({ player: 1 });
+bingoCardSchema.index({ game: 1 });
+bingoCardSchema.index({ hasBingo: 1 });
+bingoCardSchema.index({ createdAt: 1 }, { expireAfterSeconds: 604800 });
 
-// Virtuals
+// Virtual for marked count
 bingoCardSchema.virtual('markedCount').get(function() {
   return this.markedNumbers.length;
 });
 
-bingoCardSchema.virtual('completionPercentage').get(function() {
-  const totalCells = 24; // 5x5 minus FREE space
-  return (this.markedNumbers.length / totalCells * 100).toFixed(1);
+// Virtual for checking if center is free (standard bingo rule)
+bingoCardSchema.virtual('freeSpace').get(function() {
+  return { row: 2, col: 2 }; // Center position
 });
 
-// Methods
-bingoCardSchema.methods.markNumber = function(number) {
-  if (this.markedNumbers.some(mn => mn.number === number)) {
-    return false; // Already marked
+// Instance Methods
+bingoCardSchema.methods.markNumber = function(number, position = null) {
+  // Check if number is already marked
+  const alreadyMarked = this.markedNumbers.some(mn => mn.number === number);
+  if (alreadyMarked) {
+    return this;
   }
 
-  // Find the position of the number
-  let position = null;
+  // If position not provided, find it in the card
+  if (!position) {
+    position = this.findNumberPosition(number);
+  }
+
+  if (!position) {
+    throw new Error(`Number ${number} not found in card`);
+  }
+
+  this.markedNumbers.push({
+    number,
+    position,
+    markedAt: new Date()
+  });
+
+  return this.save();
+};
+
+bingoCardSchema.methods.findNumberPosition = function(number) {
   const letters = ['B', 'I', 'N', 'G', 'O'];
   
   for (let col = 0; col < 5; col++) {
     const letter = letters[col];
-    const rowIndex = this.numbers[letter].indexOf(number);
-    if (rowIndex !== -1) {
-      position = { row: rowIndex, col };
-      break;
+    const numbers = this.numbers[letter];
+    
+    for (let row = 0; row < 5; row++) {
+      if (numbers[row] === number) {
+        return { row, col };
+      }
     }
   }
+  
+  return null;
+};
 
-  if (position) {
-    this.markedNumbers.push({
-      number,
-      markedAt: new Date(),
-      position
-    });
+bingoCardSchema.methods.getNumberAt = function(row, col) {
+  const letters = ['B', 'I', 'N', 'G', 'O'];
+  const letter = letters[col];
+  return this.numbers[letter][row];
+};
+
+bingoCardSchema.methods.isMarked = function(row, col) {
+  // Center is always considered marked
+  if (row === 2 && col === 2) {
     return true;
   }
 
-  return false;
+  const number = this.getNumberAt(row, col);
+  return this.markedNumbers.some(mn => mn.number === number);
 };
 
-bingoCardSchema.methods.checkPatterns = function() {
+bingoCardSchema.methods.checkBingo = function() {
+  const patterns = this.getWinningPatterns();
+  
+  for (const pattern of patterns) {
+    if (this.checkPattern(pattern)) {
+      this.hasBingo = true;
+      this.winningPattern = pattern.name;
+      this.winningNumbers = pattern.numbers;
+      this.bingoDeclaredAt = new Date();
+      return pattern;
+    }
+  }
+  
+  return null;
+};
+
+bingoCardSchema.methods.getWinningPatterns = function() {
   const patterns = [];
-  const markedPositions = this.markedNumbers.map(mn => mn.position);
   
-  // Check rows
+  // Rows
   for (let row = 0; row < 5; row++) {
-    const rowComplete = markedPositions.filter(pos => pos.row === row).length === 5;
-    if (rowComplete && !this.patterns.singleLine.lines.includes(row)) {
-      this.patterns.singleLine.lines.push(row);
-      if (this.patterns.singleLine.lines.length === 1) {
-        patterns.push('single_line');
-      } else if (this.patterns.singleLine.lines.length === 2 && !this.patterns.doubleLine.isComplete) {
-        this.patterns.doubleLine.isComplete = true;
-        this.patterns.doubleLine.completedAt = new Date();
-        patterns.push('double_line');
-      } else if (this.patterns.singleLine.lines.length === 3 && !this.patterns.tripleLine.isComplete) {
-        this.patterns.tripleLine.isComplete = true;
-        this.patterns.tripleLine.completedAt = new Date();
-        patterns.push('triple_line');
-      }
+    const numbers = [];
+    for (let col = 0; col < 5; col++) {
+      if (row === 2 && col === 2) continue; // Skip free space
+      numbers.push(this.getNumberAt(row, col));
     }
+    patterns.push({
+      name: GAME_CONSTANTS.WINNING_PATTERNS.LINE,
+      type: 'row',
+      index: row,
+      numbers
+    });
   }
-
-  // Check columns
-  for (let col = 0; col < 5; col++) {
-    const colComplete = markedPositions.filter(pos => pos.col === col).length === 5;
-    if (colComplete && !this.patterns.singleLine.lines.includes(col + 5)) { // Offset for columns
-      this.patterns.singleLine.lines.push(col + 5);
-      // Similar logic for multiple lines...
-    }
-  }
-
-  // Check four corners
-  const corners = [
-    { row: 0, col: 0 }, { row: 0, col: 4 },
-    { row: 4, col: 0 }, { row: 4, col: 4 }
-  ];
-  const cornersComplete = corners.every(corner =>
-    markedPositions.some(pos => pos.row === corner.row && pos.col === corner.col)
-  );
-  if (cornersComplete && !this.patterns.fourCorners.isComplete) {
-    this.patterns.fourCorners.isComplete = true;
-    this.patterns.fourCorners.completedAt = new Date();
-    patterns.push('four_corners');
-  }
-
-  // Check diagonals
-  const diag1Complete = [0,1,2,3,4].every(i =>
-    markedPositions.some(pos => pos.row === i && pos.col === i)
-  );
-  const diag2Complete = [0,1,2,3,4].every(i =>
-    markedPositions.some(pos => pos.row === i && pos.col === 4-i)
-  );
   
-  if (diag1Complete && !this.patterns.diagonal.isComplete) {
-    this.patterns.diagonal.isComplete = true;
-    this.patterns.diagonal.completedAt = new Date();
-    patterns.push('diagonal');
+  // Columns
+  for (let col = 0; col < 5; col++) {
+    const numbers = [];
+    for (let row = 0; row < 5; row++) {
+      if (row === 2 && col === 2) continue; // Skip free space
+      numbers.push(this.getNumberAt(row, col));
+    }
+    patterns.push({
+      name: GAME_CONSTANTS.WINNING_PATTERNS.LINE,
+      type: 'column',
+      index: col,
+      numbers
+    });
   }
-
-  // Check full house (all numbers marked)
-  if (this.markedNumbers.length >= 24 && !this.patterns.fullHouse.isComplete) { // 24 = 25 - 1 FREE
-    this.patterns.fullHouse.isComplete = true;
-    this.patterns.fullHouse.completedAt = new Date();
-    patterns.push('full_house');
+  
+  // Diagonals
+  const diag1 = [], diag2 = [];
+  for (let i = 0; i < 5; i++) {
+    if (i !== 2) { // Skip center for diagonals
+      diag1.push(this.getNumberAt(i, i));
+      diag2.push(this.getNumberAt(i, 4 - i));
+    }
   }
-
+  
+  patterns.push({
+    name: GAME_CONSTANTS.WINNING_PATTERNS.DIAGONAL,
+    type: 'diagonal1',
+    numbers: diag1
+  });
+  
+  patterns.push({
+    name: GAME_CONSTANTS.WINNING_PATTERNS.DIAGONAL,
+    type: 'diagonal2',
+    numbers: diag2
+  });
+  
+  // Four corners
+  const corners = [
+    this.getNumberAt(0, 0),
+    this.getNumberAt(0, 4),
+    this.getNumberAt(4, 0),
+    this.getNumberAt(4, 4)
+  ];
+  
+  patterns.push({
+    name: GAME_CONSTANTS.WINNING_PATTERNS.FOUR_CORNERS,
+    type: 'corners',
+    numbers: corners
+  });
+  
   return patterns;
 };
 
-bingoCardSchema.methods.getCardGrid = function() {
-  const grid = [];
+bingoCardSchema.methods.checkPattern = function(pattern) {
+  return pattern.numbers.every(number => {
+    // Free space is always considered marked
+    if (number === null) return true;
+    
+    return this.markedNumbers.some(mn => mn.number === number);
+  });
+};
+
+bingoCardSchema.methods.getCardDisplay = function() {
+  const display = [];
   const letters = ['B', 'I', 'N', 'G', 'O'];
   
   for (let row = 0; row < 5; row++) {
-    const gridRow = [];
+    const rowData = [];
     for (let col = 0; col < 5; col++) {
-      if (row === 2 && col === 2) {
-        gridRow.push({ number: 'FREE', isMarked: true });
-      } else {
-        const number = this.numbers[letters[col]][row];
-        const isMarked = this.markedNumbers.some(mn => mn.number === number);
-        gridRow.push({ number, isMarked });
-      }
+      const number = this.getNumberAt(row, col);
+      const isMarked = this.isMarked(row, col);
+      
+      rowData.push({
+        number,
+        isMarked,
+        position: { row, col },
+        isFreeSpace: (row === 2 && col === 2)
+      });
     }
-    grid.push(gridRow);
+    display.push(rowData);
   }
   
-  return grid;
+  return display;
 };
 
-// Static methods
-bingoCardSchema.statics.generateCard = function(userId, gameId) {
-  const letters = ['B', 'I', 'N', 'G', 'O'];
-  const numbers = {};
+// Static Methods
+bingoCardSchema.statics.generateCard = function(playerId, gameId) {
+  const cardId = `CARD_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   
-  for (let i = 0; i < letters.length; i++) {
-    const letter = letters[i];
-    const min = i * 15 + 1;
-    const max = min + 14;
-    
-    const columnNumbers = new Set();
-    while (columnNumbers.size < 5) {
-      const num = Math.floor(Math.random() * (max - min + 1)) + min;
-      columnNumbers.add(num);
-    }
-    
-    numbers[letter] = Array.from(columnNumbers).sort((a, b) => a - b);
-  }
+  const numbers = {
+    B: generateColumnNumbers(1, 15),
+    I: generateColumnNumbers(16, 30),
+    N: generateColumnNumbers(31, 45),
+    G: generateColumnNumbers(46, 60),
+    O: generateColumnNumbers(61, 75)
+  };
   
-  return {
-    cardId: `card_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-    user: userId,
+  // Make center free (replace with null)
+  numbers.N[2] = null;
+  
+  return new this({
+    cardId,
+    player: playerId,
     game: gameId,
     numbers
-  };
+  });
 };
 
-bingoCardSchema.statics.findByUserAndGame = function(userId, gameId) {
-  return this.find({ user: userId, game: gameId, isActive: true });
-};
+// Helper function to generate column numbers
+function generateColumnNumbers(min, max) {
+  const numbers = [];
+  const available = Array.from({ length: max - min + 1 }, (_, i) => min + i);
+  
+  // Shuffle and take first 5
+  for (let i = available.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [available[i], available[j]] = [available[j], available[i]];
+  }
+  
+  return available.slice(0, 5);
+}
 
 module.exports = mongoose.model('BingoCard', bingoCardSchema);
