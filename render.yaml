@@ -12,12 +12,13 @@ services:
         fromDatabase:
           name: bingo-mongodb
           property: connectionString
-      - key: CLIENT_URL
-        value: https://your-bingo-frontend.onrender.com
-      - key: SECRET_KEY
+      - key: JWT_SECRET
         generateValue: true
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
 
 databases:
   - name: bingo-mongodb
     plan: free
+    databaseName: bingo
     ipAllowList: []
