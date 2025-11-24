@@ -1,15 +1,23 @@
 const mongoose = require('mongoose');
-const logger = require('../../utils/logger');
 
 async function run() {
-  logger.info('Creating sample rooms...');
+  console.log('Creating sample rooms...');
   
-  const Room = mongoose.model('Room');
+  // Define a simple room schema for this seeder
+  const RoomSchema = new mongoose.Schema({
+    roomId: String,
+    name: String,
+    description: String,
+    config: Object,
+    status: String
+  });
+  
+  const Room = mongoose.model('Room', RoomSchema);
   
   // Check if sample rooms already exist
   const existingRooms = await Room.find({ name: { $in: ['Quick Play', 'Pro League', 'Free Entry'] } });
   if (existingRooms.length > 0) {
-    logger.info('⏭️  Sample rooms already exist');
+    console.log('⏭️  Sample rooms already exist');
     return;
   }
 
@@ -24,7 +32,8 @@ async function run() {
         entryFee: 0,
         autoStart: true,
         minPlayersToStart: 2
-      }
+      },
+      status: 'waiting'
     },
     {
       name: 'Pro League',
@@ -37,7 +46,8 @@ async function run() {
         prizePool: 250,
         autoStart: true,
         minPlayersToStart: 4
-      }
+      },
+      status: 'waiting'
     },
     {
       name: 'Free Entry',
@@ -49,7 +59,8 @@ async function run() {
         entryFee: 0,
         autoStart: false,
         minPlayersToStart: 2
-      }
+      },
+      status: 'waiting'
     }
   ];
 
@@ -60,10 +71,10 @@ async function run() {
     });
     
     await room.save();
-    logger.info(`✅ Created room: ${roomData.name}`);
+    console.log(`✅ Created room: ${roomData.name}`);
   }
 
-  logger.info('🎉 Sample rooms created successfully');
+  console.log('🎉 Sample rooms created successfully');
 }
 
 module.exports = {
