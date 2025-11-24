@@ -12,47 +12,54 @@ const initSocket = (server) => {
       credentials: true
     },
     pingTimeout: 60000,
-    pingInterval: 25000
+    pingInterval: 25000,
+    connectionStateRecovery: {
+      // enable reconnection with state recovery
+      maxDisconnectionDuration: 2 * 60 * 1000, // 2 minutes
+      skipMiddlewares: true
+    }
   });
 
   // Socket middleware
   io.use(authenticateSocket);
 
   io.on('connection', (socket) => {
-    logger.info(`🔌 New socket connection: ${socket.id}`);
+    logger.info(`🔌 New socket connection: ${socket.id} - User: ${socket.userId}`);
     
-    // Join player to their room
+    // Join player to their personal room
     if (socket.userId) {
       socket.join(`user:${socket.userId}`);
     }
 
     // Import and register event handlers
-    require('../events/gameEvents')(socket, io);
-    require('../events/playerEvents')(socket, io);
-    require('../events/roomEvents')(socket, io);
-    require('../events/bingoEvents')(socket, io);
+    require('../events/socketEvents')(socket, io);
 
-    socket.on('disconnect', (reason) => {
-      logger.info(`🔌 Socket disconnected: ${socket.id} - Reason: ${reason}`);
-      handleDisconnect(socket);
-    });
-
-    socket.on('error', (error) => {
-      logger.error(`Socket error for ${socket.id}:`, error);
+    // Emit connection success
+    socket.emit('connected', {
+      socketId: socket.id,
+      userId: socket.userId,
+      timestamp: new Date()
     });
   });
 
-  return io;
-};
+  // Handle server-wide events
+  io.of('/').adapter.on('create-room', (room) => {
+    logger.debug(`Room created: ${room}`);
+  });
 
-const handleDisconnect = (socket) => {
-  // Clean up when player disconnects
-  if (socket.roomId) {
-    socket.to(socket.roomId).emit('player_left', {
-      playerId: socket.userId,
-      playerCount: io.sockets.adapter.rooms.get(socket.roomId)?.size || 0
-    });
-  }
+  io.of('/').adapter.on('delete-room', (room) => {
+    logger.debug(`Room deleted: ${room}`);
+  });
+
+  io.of('/').adapter.on('join-room', (room, id) => {
+    logger.debug(`Socket ${id} joined room: ${room}`);
+  });
+
+  io.of('/').adapter.on('leave-room', (room, id) => {
+    logger.debug(`Socket ${id} left room: ${room}`);
+  });
+
+  return io;
 };
 
 const getIO = () => {
@@ -62,7 +69,36 @@ const getIO = () => {
   return io;
 };
 
+// Helper methods for emitting events from services
+const emitToUser = (userId, event, data) => {
+  if (io) {
+    io.to(`user:${userId}`).emit(event, data);
+  }
+};
+
+const emitToGame = (gameId, event, data) => {
+  if (io) {
+    io.to(`game:${gameId}`).emit(event, data);
+  }
+};
+
+const emitToRoom = (roomId, event, data) => {
+  if (io) {
+    io.to(`room:${roomId}`).emit(event, data);
+  }
+};
+
+const broadcast = (event, data) => {
+  if (io) {
+    io.emit(event, data);
+  }
+};
+
 module.exports = {
   initSocket,
-  getIO
+  getIO,
+  emitToUser,
+  emitToGame,
+  emitToRoom,
+  broadcast
 };
