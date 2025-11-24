@@ -2,7 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const logger = require('./utils/logger');
 
 const app = express();
 
@@ -38,27 +37,14 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Request logging
 app.use((req, res, next) => {
-  logger.info(`${req.method} ${req.path} - IP: ${req.ip}`);
+  console.log(`${req.method} ${req.path} - IP: ${req.ip}`);
   next();
 });
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'success',
-    message: 'Bingo Server is running!',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development'
-  });
-});
+// Use routes
+app.use('/', require('./routes'));
 
-// API Routes
-app.use('/api', require('./routes'));
-
-// Webhook routes
-app.use('/webhook', require('./routes/webhook'));
-
-// 404 handler
+// 404 handler for undefined routes
 app.use('*', (req, res) => {
   res.status(404).json({
     status: 'error',
@@ -67,6 +53,14 @@ app.use('*', (req, res) => {
 });
 
 // Global error handler
-app.use(require('./middleware/errorHandler'));
+app.use((error, req, res, next) => {
+  console.error('Global error handler:', error);
+  
+  res.status(error.status || 500).json({
+    status: 'error',
+    message: error.message || 'Internal server error',
+    ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
+  });
+});
 
 module.exports = app;
