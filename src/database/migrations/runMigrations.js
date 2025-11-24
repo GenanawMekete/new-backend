@@ -1,5 +1,7 @@
 const mongoose = require('mongoose');
-const { MONGODB_URI } = require('../../config/database');
+const path = require('path');
+const fs = require('fs');
+const { MONGODB_URI, databaseConfig } = require('../../config/database');
 const logger = require('../../utils/logger');
 
 class MigrationManager {
@@ -10,10 +12,7 @@ class MigrationManager {
 
   async connect() {
     try {
-      await mongoose.connect(MONGODB_URI, {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-      });
+      await mongoose.connect(MONGODB_URI, databaseConfig);
       logger.info('✅ Connected to MongoDB for migrations');
     } catch (error) {
       logger.error('❌ Failed to connect to MongoDB:', error);
@@ -30,6 +29,28 @@ class MigrationManager {
     this.migrations.push({ name, run: migrationFunction });
   }
 
+  async loadMigrations() {
+    const migrationsDir = __dirname;
+    const files = fs.readdirSync(migrationsDir)
+      .filter(file => file.endsWith('.js') && file !== 'runMigrations.js')
+      .sort(); // Sort to ensure correct order
+
+    for (const file of files) {
+      const migrationPath = path.join(migrationsDir, file);
+      try {
+        const migration = require(migrationPath);
+        if (migration.name && typeof migration.run === 'function') {
+          this.registerMigration(migration.name, migration.run);
+          logger.debug(`📁 Loaded migration: ${migration.name}`);
+        } else {
+          logger.warn(`⚠️ Invalid migration file: ${file}`);
+        }
+      } catch (error) {
+        logger.error(`❌ Failed to load migration ${file}:`, error);
+      }
+    }
+  }
+
   async runMigrations() {
     await this.connect();
 
@@ -43,10 +64,11 @@ class MigrationManager {
       }
 
       // Get already executed migrations
-      const MigrationModel = mongoose.model('Migration', new mongoose.Schema({
-        name: String,
+      const MigrationSchema = new mongoose.Schema({
+        name: { type: String, required: true, unique: true },
         executedAt: { type: Date, default: Date.now }
-      }));
+      });
+      const MigrationModel = mongoose.model('Migration', MigrationSchema);
       
       const executedMigrations = await MigrationModel.find({});
       const executedMigrationNames = new Set(executedMigrations.map(m => m.name));
@@ -75,7 +97,11 @@ class MigrationManager {
         }
       }
 
-      logger.info(`🎉 Migrations completed. Executed ${executedCount} new migration(s).`);
+      if (executedCount === 0) {
+        logger.info('🎉 All migrations are up to date!');
+      } else {
+        logger.info(`🎉 Migrations completed. Executed ${executedCount} new migration(s).`);
+      }
       
     } finally {
       await this.disconnect();
@@ -86,22 +112,23 @@ class MigrationManager {
     await this.connect();
     
     try {
-      const MigrationModel = mongoose.model('Migration', new mongoose.Schema({
+      const MigrationSchema = new mongoose.Schema({
         name: String,
         executedAt: Date
-      }));
+      });
+      const MigrationModel = mongoose.model('Migration', MigrationSchema);
       
       const executedMigrations = await MigrationModel.find({}).sort({ executedAt: 1 });
       
       logger.info('📋 Migration Status:');
       logger.info('===================');
       
-      this.migrations.forEach(migration => {
+      for (const migration of this.migrations) {
         const executed = executedMigrations.find(m => m.name === migration.name);
         const status = executed ? '✅ Executed' : '⏳ Pending';
         const date = executed ? `(${executed.executedAt.toISOString()})` : '';
         logger.info(`${status}: ${migration.name} ${date}`);
-      });
+      }
       
     } finally {
       await this.disconnect();
@@ -112,25 +139,14 @@ class MigrationManager {
 // Create migration manager instance
 const migrationManager = new MigrationManager();
 
-// Register all migrations
-const migrationFiles = [
-  require('./001_create_players'),
-  require('./002_create_games'),
-  require('./003_create_rooms'),
-  require('./004_create_bingocards'),
-  require('./005_create_transactions'),
-  require('./006_create_indexes')
-];
-
-migrationFiles.forEach(migration => {
-  migrationManager.registerMigration(migration.name, migration.run);
-});
-
 // CLI handling
 const command = process.argv[2];
 
 async function main() {
   try {
+    // Load migrations dynamically
+    await migrationManager.loadMigrations();
+    
     switch (command) {
       case 'run':
         await migrationManager.runMigrations();
