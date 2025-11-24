@@ -1,5 +1,7 @@
 const mongoose = require('mongoose');
-const { MONGODB_URI } = require('../../config/database');
+const path = require('path');
+const fs = require('fs');
+const { MONGODB_URI, databaseConfig } = require('../../config/database');
 const logger = require('../../utils/logger');
 
 class SeederManager {
@@ -10,10 +12,7 @@ class SeederManager {
 
   async connect() {
     try {
-      await mongoose.connect(MONGODB_URI, {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-      });
+      await mongoose.connect(MONGODB_URI, databaseConfig);
       logger.info('✅ Connected to MongoDB for seeding');
     } catch (error) {
       logger.error('❌ Failed to connect to MongoDB:', error);
@@ -30,6 +29,28 @@ class SeederManager {
     this.seeders.push({ name, run: seederFunction });
   }
 
+  async loadSeeders() {
+    const seedersDir = __dirname;
+    const files = fs.readdirSync(seedersDir)
+      .filter(file => file.endsWith('.js') && file !== 'runSeeders.js')
+      .sort();
+
+    for (const file of files) {
+      const seederPath = path.join(seedersDir, file);
+      try {
+        const seeder = require(seederPath);
+        if (seeder.name && typeof seeder.run === 'function') {
+          this.registerSeeder(seeder.name, seeder.run);
+          logger.debug(`📁 Loaded seeder: ${seeder.name}`);
+        } else {
+          logger.warn(`⚠️ Invalid seeder file: ${file}`);
+        }
+      } catch (error) {
+        logger.error(`❌ Failed to load seeder ${file}:`, error);
+      }
+    }
+  }
+
   async runSeeders() {
     await this.connect();
 
@@ -43,10 +64,11 @@ class SeederManager {
       }
 
       // Get already executed seeders
-      const SeederModel = mongoose.model('Seeder', new mongoose.Schema({
-        name: String,
+      const SeederSchema = new mongoose.Schema({
+        name: { type: String, required: true, unique: true },
         executedAt: { type: Date, default: Date.now }
-      }));
+      });
+      const SeederModel = mongoose.model('Seeder', SeederSchema);
       
       const executedSeeders = await SeederModel.find({});
       const executedSeederNames = new Set(executedSeeders.map(s => s.name));
@@ -75,7 +97,11 @@ class SeederManager {
         }
       }
 
-      logger.info(`🎉 Seeders completed. Executed ${executedCount} new seeder(s).`);
+      if (executedCount === 0) {
+        logger.info('🎉 All seeders are up to date!');
+      } else {
+        logger.info(`🎉 Seeders completed. Executed ${executedCount} new seeder(s).`);
+      }
       
     } finally {
       await this.disconnect();
@@ -86,22 +112,23 @@ class SeederManager {
     await this.connect();
     
     try {
-      const SeederModel = mongoose.model('Seeder', new mongoose.Schema({
+      const SeederSchema = new mongoose.Schema({
         name: String,
         executedAt: Date
-      }));
+      });
+      const SeederModel = mongoose.model('Seeder', SeederSchema);
       
       const executedSeeders = await SeederModel.find({}).sort({ executedAt: 1 });
       
       logger.info('📋 Seeder Status:');
       logger.info('================');
       
-      this.seeders.forEach(seeder => {
+      for (const seeder of this.seeders) {
         const executed = executedSeeders.find(s => s.name === seeder.name);
         const status = executed ? '✅ Executed' : '⏳ Pending';
         const date = executed ? `(${executed.executedAt.toISOString()})` : '';
         logger.info(`${status}: ${seeder.name} ${date}`);
-      });
+      }
       
     } finally {
       await this.disconnect();
@@ -112,10 +139,11 @@ class SeederManager {
     await this.connect();
     
     try {
-      const SeederModel = mongoose.model('Seeder', new mongoose.Schema({
+      const SeederSchema = new mongoose.Schema({
         name: String,
         executedAt: Date
-      }));
+      });
+      const SeederModel = mongoose.model('Seeder', SeederSchema);
       
       await SeederModel.deleteMany({});
       logger.info('🗑️  All seeder records have been reset');
@@ -129,22 +157,14 @@ class SeederManager {
 // Create seeder manager instance
 const seederManager = new SeederManager();
 
-// Register all seeders
-const seederFiles = [
-  require('./adminUser'),
-  require('./gamePatterns'),
-  require('./sampleRooms')
-];
-
-seederFiles.forEach(seeder => {
-  seederManager.registerSeeder(seeder.name, seeder.run);
-});
-
 // CLI handling
 const command = process.argv[2];
 
 async function main() {
   try {
+    // Load seeders dynamically
+    await seederManager.loadSeeders();
+    
     switch (command) {
       case 'run':
         await seederManager.runSeeders();
