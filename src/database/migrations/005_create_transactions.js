@@ -1,39 +1,28 @@
 const mongoose = require('mongoose');
 
 async function run() {
-  console.log('Creating additional database indexes...');
+  console.log('Creating transactions collection...');
   
   const db = mongoose.connection.db;
   
-  // Player indexes
-  await db.collection('players').createIndex({ coins: -1 });
-  await db.collection('players').createIndex({ totalGames: -1 });
-  await db.collection('players').createIndex({ gamesWon: -1 });
-  await db.collection('players').createIndex({ createdAt: -1 });
+  // Create transactions collection if it doesn't exist
+  const collections = await db.listCollections({ name: 'transactions' }).toArray();
+  if (collections.length === 0) {
+    await db.createCollection('transactions');
+    console.log('✅ Transactions collection created');
+  } else {
+    console.log('⏭️ Transactions collection already exists');
+  }
   
-  // Game indexes
-  await db.collection('games').createIndex({ startTime: 1 });
-  await db.collection('games').createIndex({ 'players.player': 1 });
-  await db.collection('games').createIndex({ createdAt: 1 });
+  // Create indexes
+  await db.collection('transactions').createIndex({ transactionId: 1 }, { unique: true });
+  await db.collection('transactions').createIndex({ player: 1 });
+  await db.collection('transactions').createIndex({ type: 1 });
   
-  // Room indexes
-  await db.collection('rooms').createIndex({ createdAt: 1 });
-  await db.collection('rooms').createIndex({ lastActivity: 1 });
-  
-  // BingoCard indexes
-  await db.collection('bingocards').createIndex({ hasBingo: 1 });
-  
-  // Transaction indexes
-  await db.collection('transactions').createIndex({ category: 1 });
-  await db.collection('transactions').createIndex({ status: 1 });
-  await db.collection('transactions').createIndex({ createdAt: -1 });
-  await db.collection('transactions').createIndex({ player: 1, createdAt: -1 });
-  await db.collection('transactions').createIndex({ relatedGame: 1 });
-  
-  console.log('✅ All additional indexes created successfully');
+  console.log('✅ Transactions indexes created');
 }
 
 module.exports = {
-  name: '006_create_indexes',
+  name: '005_create_transactions',
   run
 };
