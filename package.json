@@ -9,5 +9,8 @@
     "seed": "node src/database/seeders/runSeeders.js",
     "lint": "eslint src/",
     "fix": "eslint src/ --fix"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3"
   }
 }
